@@ -1,0 +1,62 @@
+steps:
+# This step runs the unit tests on the app
+- name: 'python:3.7-slim'
+  id: Test
+  entrypoint: /bin/sh
+  args:
+  - -c
+  - 'pip install flask && python test_app.py -v'
+
+# This step builds the container image.
+- name: 'gcr.io/cloud-builders/docker'
+  id: Build
+  args:
+  - 'build'
+  - '-t'
+  - 'gcr.io/$_PROJECT_ID/$_APP_IMAGE:${SHORT_SHA}'
+  - '.'
+
+# This step pushes the image to Container Registry
+- name: 'gcr.io/cloud-builders/docker'
+  id: Push
+  args:
+  - 'push'
+  - 'gcr.io/$_PROJECT_ID/$_APP_IMAGE:${SHORT_SHA}'
+
+
+# This step clones the env repository
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Clone env repository
+  entrypoint: /bin/sh
+  args:
+  - '-c'
+  - |
+    gcloud source repos clone $_ENV_REPO && \
+    cd $_ENV_REPO && \
+    git checkout $_ENV_NAME && \
+    git config user.email $(gcloud auth list --filter=status:ACTIVE --format='value(account)')
+
+
+# This step generates the new manifest
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Generate manifest
+  entrypoint: /bin/sh
+  args:
+  - '-c'
+  - |
+     sed -i "19s/.*/        image: gcr.io\/$_PROJECT_ID\/$_APP_IMAGE:${SHORT_SHA}/" $_ENV_REPO/kubernetes.yaml
+
+# This step pushes the manifest back to ENV_REPO
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Push manifest
+  entrypoint: /bin/sh
+  args:
+  - '-c'
+  - |
+    set -x && \
+    cd $_ENV_REPO && \
+    git add kubernetes.yaml && \
+    git commit -m "Deploying image gcr.io/${PROJECT_ID}/$_APP_IMAGE:${SHORT_SHA}
+    Built from commit ${COMMIT_SHA}
+    Author: $(git log --format='%an <%ae>' -n 1 HEAD)" && \
+    git push origin $_ENV_NAME
